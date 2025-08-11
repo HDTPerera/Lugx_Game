@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
-      - name: Deploy via SSH to EC2 (preload + rolling update)
+      - name: Deploy via SSH to EC2 (preload images + rolling update)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -79,32 +79,24 @@ jobs:
             set -euo pipefail
             cd ~/lugx_Gaming-CW || exit 1
 
-            echo "==> Docker login on EC2 for reliable pulls"
-            docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+            # Write a self-contained script on the EC2 host (avoids SSH line wrapping issues)
+            cat >/tmp/ci_deploy.sh <<'EOS'
+            set -euo pipefail
 
-            echo "==> Pre-pull :latest images on EC2 host"
+            echo "==> Docker login"
+            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+            echo "==> Pre-pull :latest images and load into Minikube cache"
             for IMG in \
               divyanjaliperera/game-service:latest \
               divyanjaliperera/order-service:latest \
               divyanjaliperera/analytics-service:latest \
-              divyanjaliperera/lugx-frontend:latest
-            do
-              echo "Pulling $IMG"
+              divyanjaliperera/lugx-frontend:latest; do
               docker pull "$IMG"
-            done
-
-            echo "==> Load images into Minikube cache"
-            for IMG in \
-              divyanjaliperera/game-service:latest \
-              divyanjaliperera/order-service:latest \
-              divyanjaliperera/analytics-service:latest \
-              divyanjaliperera/lugx-frontend:latest
-            do
-              echo "minikube image load $IMG"
               minikube image load "$IMG"
             done
 
-            echo "==> Ensure/refresh k8s objects (idempotent)"
+            echo "==> kubectl apply (idempotent)"
             kubectl apply -f lugx-k8s/postgres/postgres.yaml
             kubectl apply -f lugx-k8s/clickhouse/clickhouse-deployment.yaml
             kubectl apply -f lugx-k8s/game-service/game-service.yaml
@@ -113,7 +105,7 @@ jobs:
             kubectl apply -f lugx-k8s/frontend/frontend.yaml
             kubectl apply -f lugx-k8s/frontend/ingress.yaml
 
-            echo "==> Rolling updates to :latest (uses cached images)"
+            echo "==> Rolling to :latest (uses cached images)"
             kubectl set image deploy/game-service      game-service=divyanjaliperera/game-service:latest
             kubectl set image deploy/order-service     order-service=divyanjaliperera/order-service:latest
             kubectl set image deploy/analytics-service analytics-service=divyanjaliperera/analytics-service:latest
@@ -125,16 +117,19 @@ jobs:
             kubectl rollout status deploy/analytics-service --timeout=300s
             kubectl rollout status deploy/lugx-frontend --timeout=300s
 
-            echo "==> In-cluster smoke tests (use registry.k8s.io/busybox)"
+            echo "==> Smoke tests (busybox, no external pulls)"
             kubectl delete pod uptest --ignore-not-found
             kubectl run uptest --image=registry.k8s.io/busybox --restart=Never -- \
-              sh -lc '
-                set -e
-                wget -S --spider http://game-service:8000/games >/dev/null 2>&1 &&
-                wget -S --spider http://order-service:8000/orders >/dev/null 2>&1 &&
-                wget -S --spider http://analytics-service:8000/events >/dev/null 2>&1 &&
-                echo ALL TESTS PASSED
-              '
+              sh -lc 'wget -S --spider http://game-service:8000/games >/dev/null 2>&1 && \
+                      wget -S --spider http://order-service:8000/orders >/dev/null 2>&1 && \
+                      wget -S --spider http://analytics-service:8000/events >/dev/null 2>&1 && \
+                      echo ALL TESTS PASSED'
             kubectl wait --for=condition=complete pod/uptest --timeout=60s || true
             kubectl logs uptest || true
             kubectl delete pod uptest --force --grace-period=0 || true
+            EOS
+
+            # Run the script with secrets passed as env vars (keeps them out of logs)
+            DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}' \
+            DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}' \
+            bash /tmp/ci_deploy.sh
