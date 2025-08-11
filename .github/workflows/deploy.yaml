@@ -1,0 +1,68 @@
+name: Deploy to EC2 Kubernetes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "k8s/**"
+      - ".github/workflows/deploy.yaml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            # pull latest repo on EC2 (we run kubectl using files in this repo)
+            cd ~/lugx_Gaming-CW || exit 1
+            git pull
+
+            # sanity checks
+            kubectl get nodes
+            kubectl get ns || true
+
+            echo "Apply base manifests (ensures everything exists)"
+            kubectl apply -f lugx-k8s/postgres/postgres.yaml
+            kubectl apply -f lugx-k8s/clickhouse/clickhouse-deployment.yaml
+            kubectl apply -f lugx-k8s/game-service/game-service.yaml
+            kubectl apply -f lugx-k8s/order-service/order-service.yaml
+            kubectl apply -f lugx-k8s/analytics-service/analytics-service.yaml
+            kubectl apply -f lugx-k8s/frontend/frontend.yaml
+            kubectl apply -f lugx-k8s/frontend/ingress.yaml
+
+            echo "Set images to the commit SHA that triggered this workflow"
+            SHA=${GITHUB_SHA}
+
+            kubectl set image deployment/game-service \
+              game-service=divyanjaliperera/game-service:${SHA}
+
+            kubectl set image deployment/order-service \
+              order-service=divyanjaliperera/order-service:${SHA}
+
+            kubectl set image deployment/analytics-service \
+              analytics-service=divyanjaliperera/analytics-service:${SHA}
+
+            kubectl set image deployment/lugx-frontend \
+              lugx-frontend=divyanjaliperera/lugx-frontend:${SHA}
+
+            echo "Wait for rollouts"
+            kubectl rollout status deploy/postgres-db --timeout=300s || true
+            kubectl rollout status deploy/clickhouse   --timeout=300s || true
+            kubectl rollout status deploy/game-service  --timeout=300s
+            kubectl rollout status deploy/order-service --timeout=300s
+            kubectl rollout status deploy/analytics-service --timeout=300s
+            kubectl rollout status deploy/lugx-frontend --timeout=300s
+
+            echo "Done."

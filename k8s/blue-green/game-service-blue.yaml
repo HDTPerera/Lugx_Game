@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: game-service-blue }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: game-service, version: blue } }
+  template:
+    metadata: { labels: { app: game-service, version: blue } }
+    spec:
+      containers:
+        - name: game-service
+          image: divyanjaliperera/game-service:latest
+          ports: [ { containerPort: 8000 } ]
+          readinessProbe: { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe:  { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources:
+            requests: { cpu: "250m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: game-service }
+spec:
+  type: ClusterIP
+  selector: { app: game-service, version: blue }
+  ports: [ { port: 8000, targetPort: 8000 } ]

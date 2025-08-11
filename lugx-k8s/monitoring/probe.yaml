@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: http-probes
+  namespace: monitoring
+spec:
+  jobName: blackbox-http
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  module: http_2xx
+  targets:
+    staticConfig:
+      static:
+        - http://game-service.default.svc.cluster.local:8000/games
+        - http://order-service.default.svc.cluster.local:8000/orders
+        - http://analytics-service.default.svc.cluster.local:8000/events

@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: analytics-service-green }
+spec:
+  replicas: 0
+  selector: { matchLabels: { app: analytics-service, version: green } }
+  template:
+    metadata: { labels: { app: analytics-service, version: green } }
+    spec:
+      containers:
+        - name: analytics-service
+          image: divyanjaliperera/analytics-service:latest
+          ports: [ { containerPort: 8000 } ]
+          env:
+            - { name: CLICKHOUSE_HOST,     value: "clickhouse" }
+            - { name: CLICKHOUSE_PORT,     value: "8123" }
+            - { name: CLICKHOUSE_DATABASE, value: "analytics" }
+            - { name: CLICKHOUSE_USERNAME, value: "default" }
+            - { name: CLICKHOUSE_PASSWORD, value: "" }
+          readinessProbe: { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe:  { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 10, periodSeconds: 10 }

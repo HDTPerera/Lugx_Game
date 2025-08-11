@@ -1,0 +1,52 @@
+name: Deploy Blue-Green to Kubernetes
+
+on:
+  workflow_dispatch:        # run manually from the Actions tab
+  # push:
+  #   branches: [ main ]     # uncomment if you also want to deploy on push
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}       # e.g. 54.xx.xx.xx
+          username: ${{ secrets.EC2_USER }}   # ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}     # full private key text (BEGIN/END…)
+          script_stop: true
+          ssh_args: "-o StrictHostKeyChecking=no"
+          script: |
+            set -euo pipefail
+
+            echo "==> Pull latest repo on EC2"
+            cd ~/lugx_Gaming-CW || { echo "Repo path not found"; exit 1; }
+            git pull
+
+            echo "==> [1/4] Apply BLUE deployments"
+            kubectl apply -f k8s/blue-green/game-service-blue.yaml
+            kubectl apply -f k8s/blue-green/order-service-blue.yaml
+            kubectl apply -f k8s/blue-green/analytics-service-blue.yaml
+
+            echo "==> [2/4] Wait for readiness"
+            kubectl rollout status deploy/game-service-blue --timeout=120s
+            kubectl rollout status deploy/order-service-blue --timeout=120s
+            kubectl rollout status deploy/analytics-service-blue --timeout=120s
+
+            echo "==> [3/4] Flip Services to BLUE"
+            kubectl patch svc game-service      -p '{"spec":{"selector":{"app":"game-service","version":"blue"}}}'
+            kubectl patch svc order-service     -p '{"spec":{"selector":{"app":"order-service","version":"blue"}}}'
+            kubectl patch svc analytics-service -p '{"spec":{"selector":{"app":"analytics-service","version":"blue"}}}'
+
+            echo "==> [4/4] Scale down GREEN (if present)"
+            kubectl scale deploy game-service-green --replicas=0 || true
+            kubectl scale deploy order-service-green --replicas=0 || true
+            kubectl scale deploy analytics-service-green --replicas=0 || true
+
+            echo "Blue-Green deploy finished."
+

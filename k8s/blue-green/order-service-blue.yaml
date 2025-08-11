@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: order-service-blue }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: order-service, version: blue } }
+  template:
+    metadata: { labels: { app: order-service, version: blue } }
+    spec:
+      containers:
+        - name: order-service
+          image: divyanjaliperera/order-service:latest
+          ports: [ { containerPort: 8000 } ]
+          readinessProbe: { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe:  { httpGet: { path: /docs, port: 8000 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources:
+            requests: { cpu: "250m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: order-service }
+spec:
+  type: ClusterIP
+  selector: { app: order-service, version: blue }
+  ports: [ { port: 8000, targetPort: 8000 } ]

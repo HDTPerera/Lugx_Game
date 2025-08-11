@@ -1,0 +1,24 @@
+from fastapi import APIRouter
+from app.schemas import GameEvent
+from app.database import get_clickhouse_client
+from app.models import event_table
+
+# Initialize ClickHouse client
+client = get_clickhouse_client()
+
+# Create API router
+router = APIRouter()
+
+@router.post("/events/")
+def log_event(event: GameEvent):
+    client.insert(
+        table=event_table,
+        data=[[
+            event.user_id,
+            event.game_id,
+            event.event_type,
+            event.timestamp.isoformat()
+        ]],
+        column_names=["user_id", "game_id", "event_type", "timestamp"]
+    )
+    return {"message": "Event logged successfully"}

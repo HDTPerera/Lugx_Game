@@ -1,0 +1,56 @@
+name: Build & Push Docker Images
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "game-service/**"
+      - "order-service/**"
+      - "analytics-service/**"
+      - "templatemo_589_lugx_gaming/**"
+      - ".github/workflows/build-images.yaml"
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: game-service
+            context: game-service
+            image: divyanjaliperera/game-service
+          - name: order-service
+            context: order-service
+            image: divyanjaliperera/order-service
+          - name: analytics-service
+            context: analytics-service
+            image: divyanjaliperera/analytics-service
+          - name: lugx-frontend
+            context: templatemo_589_lugx_gaming
+            image: divyanjaliperera/lugx-frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ⬇️ THIS is the critical step you were missing
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push (${{ matrix.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ matrix.image }}:latest
+            ${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=registry,ref=${{ matrix.image }}:latest
+          cache-to: type=inline
