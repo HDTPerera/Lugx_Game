@@ -66,6 +66,9 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script_stop: true
           script: |
+            ls -la
+            echo ---
+            ls -R lugx-k8s
             set -euo pipefail
 
             # Use your existing files on EC2
@@ -74,7 +77,7 @@ jobs:
             # Ensure k8s objects exist (safe to re-apply)
             kubectl apply -f lugx-k8s/postgres/postgres.yaml
             kubectl apply -f lugx-k8s/clickhouse/clickhouse-deployment.yaml
-            kubectl apply -f lugx-k8s/game_service/game-service.yaml
+            kubectl apply -f lugx-k8s/game-service/game-service.yaml
             kubectl apply -f lugx-k8s/order_service/order-service.yaml
             kubectl apply -f lugx-k8s/analytics-service/analytics-service.yaml
             kubectl apply -f lugx-k8s/frontend/frontend.yaml
