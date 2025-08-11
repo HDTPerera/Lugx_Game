@@ -1,20 +1,63 @@
-name: Deploy to EC2 Kubernetes
+name: CI/CD - Build, Deploy, Test (rolling)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
     paths:
-      - "k8s/**"
+      - "game-service/**"
+      - "order-service/**"
+      - "analytics-service/**"
+      - "lugx-k8s/**"
       - ".github/workflows/deploy.yaml"
 
+env:
+  IMAGE_TAG: ${{ github.sha }}
+
 jobs:
-  deploy:
+  build-and-push:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push game-service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./game-service
+          push: true
+          tags: |
+            divyanjaliperera/game-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/game-service:latest
+
+      - name: Build & push order-service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./order-service
+          push: true
+          tags: |
+            divyanjaliperera/order-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/order-service:latest
+
+      - name: Build & push analytics-service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./analytics-service
+          push: true
+          tags: |
+            divyanjaliperera/analytics-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/analytics-service:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
       - name: Deploy via SSH to EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -25,44 +68,44 @@ jobs:
           script: |
             set -euo pipefail
 
-            # pull latest repo on EC2 (we run kubectl using files in this repo)
+            # Use your existing files on EC2
             cd ~/lugx_Gaming-CW || exit 1
-            git pull
 
-            # sanity checks
-            kubectl get nodes
-            kubectl get ns || true
-
-            echo "Apply base manifests (ensures everything exists)"
+            # Ensure k8s objects exist (safe to re-apply)
             kubectl apply -f lugx-k8s/postgres/postgres.yaml
             kubectl apply -f lugx-k8s/clickhouse/clickhouse-deployment.yaml
-            kubectl apply -f lugx-k8s/game-service/game-service.yaml
-            kubectl apply -f lugx-k8s/order-service/order-service.yaml
+            kubectl apply -f lugx-k8s/game_service/game-service.yaml
+            kubectl apply -f lugx-k8s/order_service/order-service.yaml
             kubectl apply -f lugx-k8s/analytics-service/analytics-service.yaml
             kubectl apply -f lugx-k8s/frontend/frontend.yaml
             kubectl apply -f lugx-k8s/frontend/ingress.yaml
 
-            echo "Set images to the commit SHA that triggered this workflow"
-            SHA=${GITHUB_SHA}
+            # Rolling updates to newly built images
+            kubectl set image deploy/game-service \
+              game-service=divyanjaliperera/game-service:${{ env.IMAGE_TAG }}
+            kubectl set image deploy/order-service \
+              order-service=divyanjaliperera/order-service:${{ env.IMAGE_TAG }}
+            kubectl set image deploy/analytics-service \
+              analytics-service=divyanjaliperera/analytics-service:${{ env.IMAGE_TAG }}
 
-            kubectl set image deployment/game-service \
-              game-service=divyanjaliperera/game-service:${SHA}
+            # Wait for rollouts to complete
+            kubectl rollout status deploy/game-service --timeout=180s
+            kubectl rollout status deploy/order-service --timeout=180s
+            kubectl rollout status deploy/analytics-service --timeout=180s
 
-            kubectl set image deployment/order-service \
-              order-service=divyanjaliperera/order-service:${SHA}
-
-            kubectl set image deployment/analytics-service \
-              analytics-service=divyanjaliperera/analytics-service:${SHA}
-
-            kubectl set image deployment/lugx-frontend \
-              lugx-frontend=divyanjaliperera/lugx-frontend:${SHA}
-
-            echo "Wait for rollouts"
-            kubectl rollout status deploy/postgres-db --timeout=300s || true
-            kubectl rollout status deploy/clickhouse   --timeout=300s || true
-            kubectl rollout status deploy/game-service  --timeout=300s
-            kubectl rollout status deploy/order-service --timeout=300s
-            kubectl rollout status deploy/analytics-service --timeout=300s
-            kubectl rollout status deploy/lugx-frontend --timeout=300s
-
-            echo "Done."
+            # In-cluster smoke tests
+            kubectl delete pod uptest --ignore-not-found
+            kubectl run uptest --image=curlimages/curl --restart=Never -- \
+              sh -lc "
+                set -e
+                echo 'Testing game-service ...' &&
+                curl -fsS http://game-service:8000/games >/dev/null &&
+                echo 'Testing order-service ...' &&
+                curl -fsS http://order-service:8000/orders >/dev/null &&
+                echo 'Testing analytics-service ...' &&
+                curl -fsS http://analytics-service:8000/events >/dev/null &&
+                echo 'ALL TESTS PASSED'
+              "
+            kubectl wait --for=condition=complete pod/uptest --timeout=60s || true
+            kubectl logs uptest || true
+            kubectl delete pod uptest --force --grace-period=0 || true
