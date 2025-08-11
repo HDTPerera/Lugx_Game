@@ -34,7 +34,7 @@ jobs:
           context: ./game-service
           push: true
           tags: |
-            divyanjaliperera/game-service:latest
+            divyanjaliperera/game-service:${{ env.IMAGE_TAG }}
             divyanjaliperera/game-service:latest
 
       - name: Build & push order-service
@@ -43,7 +43,7 @@ jobs:
           context: ./order-service
           push: true
           tags: |
-            divyanjaliperera/order-service:latest
+            divyanjaliperera/order-service:${{ env.IMAGE_TAG }}
             divyanjaliperera/order-service:latest
 
       - name: Build & push analytics-service
@@ -52,7 +52,7 @@ jobs:
           context: ./analytics-service
           push: true
           tags: |
-            divyanjaliperera/analytics-service:latest
+            divyanjaliperera/analytics-service:${{ env.IMAGE_TAG }}
             divyanjaliperera/analytics-service:latest
 
       - name: Build & push frontend
@@ -61,14 +61,14 @@ jobs:
           context: ./templatemo_589_lugx_gaming
           push: true
           tags: |
-            divyanjaliperera/lugx-frontend:latest
+            divyanjaliperera/lugx-frontend:${{ env.IMAGE_TAG }}
             divyanjaliperera/lugx-frontend:latest
 
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
-      - name: Deploy via SSH to EC2
+      - name: Deploy via SSH to EC2 (preload + rolling update)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -79,12 +79,32 @@ jobs:
             set -euo pipefail
             cd ~/lugx_Gaming-CW || exit 1
 
-            # Debug tree (now inside repo)
-            ls -la
-            echo '--- repo tree (lugx-k8s) ---'
-            ls -R lugx-k8s || true
+            echo "==> Docker login on EC2 for reliable pulls"
+            docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
 
-            # Ensure/refresh k8s objects (idempotent)
+            echo "==> Pre-pull :latest images on EC2 host"
+            for IMG in \
+              divyanjaliperera/game-service:latest \
+              divyanjaliperera/order-service:latest \
+              divyanjaliperera/analytics-service:latest \
+              divyanjaliperera/lugx-frontend:latest
+            do
+              echo "Pulling $IMG"
+              docker pull "$IMG"
+            done
+
+            echo "==> Load images into Minikube cache"
+            for IMG in \
+              divyanjaliperera/game-service:latest \
+              divyanjaliperera/order-service:latest \
+              divyanjaliperera/analytics-service:latest \
+              divyanjaliperera/lugx-frontend:latest
+            do
+              echo "minikube image load $IMG"
+              minikube image load "$IMG"
+            done
+
+            echo "==> Ensure/refresh k8s objects (idempotent)"
             kubectl apply -f lugx-k8s/postgres/postgres.yaml
             kubectl apply -f lugx-k8s/clickhouse/clickhouse-deployment.yaml
             kubectl apply -f lugx-k8s/game-service/game-service.yaml
@@ -93,32 +113,28 @@ jobs:
             kubectl apply -f lugx-k8s/frontend/frontend.yaml
             kubectl apply -f lugx-k8s/frontend/ingress.yaml
 
-            # Rolling updates to new images
-            kubectl set image deploy/game-service \
-              game-service=divyanjaliperera/game-service:latest
-            kubectl set image deploy/order-service \
-              order-service=divyanjaliperera/order-service:latest
-            kubectl set image deploy/analytics-service \
-              analytics-service=divyanjaliperera/analytics-service:latest
-            kubectl set image deploy/lugx-frontend \
-              lugx-frontend=divyanjaliperera/lugx-frontend:latest
+            echo "==> Rolling updates to :latest (uses cached images)"
+            kubectl set image deploy/game-service      game-service=divyanjaliperera/game-service:latest
+            kubectl set image deploy/order-service     order-service=divyanjaliperera/order-service:latest
+            kubectl set image deploy/analytics-service analytics-service=divyanjaliperera/analytics-service:latest
+            kubectl set image deploy/lugx-frontend     lugx-frontend=divyanjaliperera/lugx-frontend:latest
 
-            # Wait for rollouts
+            echo "==> Wait for rollouts"
             kubectl rollout status deploy/game-service --timeout=300s
             kubectl rollout status deploy/order-service --timeout=300s
             kubectl rollout status deploy/analytics-service --timeout=300s
             kubectl rollout status deploy/lugx-frontend --timeout=300s
 
-            # In-cluster smoke tests
+            echo "==> In-cluster smoke tests (use registry.k8s.io/busybox)"
             kubectl delete pod uptest --ignore-not-found
-            kubectl run uptest --image=curlimages/curl --restart=Never -- \
-              sh -lc "
+            kubectl run uptest --image=registry.k8s.io/busybox --restart=Never -- \
+              sh -lc '
                 set -e
-                curl -fsS http://game-service:8000/games >/dev/null &&
-                curl -fsS http://order-service:8000/orders >/dev/null &&
-                curl -fsS http://analytics-service:8000/events >/dev/null &&
-                echo 'ALL TESTS PASSED'
-              "
+                wget -S --spider http://game-service:8000/games >/dev/null 2>&1 &&
+                wget -S --spider http://order-service:8000/orders >/dev/null 2>&1 &&
+                wget -S --spider http://analytics-service:8000/events >/dev/null 2>&1 &&
+                echo ALL TESTS PASSED
+              '
             kubectl wait --for=condition=complete pod/uptest --timeout=60s || true
             kubectl logs uptest || true
             kubectl delete pod uptest --force --grace-period=0 || true
