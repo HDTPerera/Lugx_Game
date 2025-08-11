@@ -34,7 +34,7 @@ jobs:
           context: ./game-service
           push: true
           tags: |
-            divyanjaliperera/game-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/game-service:latest
             divyanjaliperera/game-service:latest
 
       - name: Build & push order-service
@@ -43,7 +43,7 @@ jobs:
           context: ./order-service
           push: true
           tags: |
-            divyanjaliperera/order-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/order-service:latest
             divyanjaliperera/order-service:latest
 
       - name: Build & push analytics-service
@@ -52,7 +52,7 @@ jobs:
           context: ./analytics-service
           push: true
           tags: |
-            divyanjaliperera/analytics-service:${{ env.IMAGE_TAG }}
+            divyanjaliperera/analytics-service:latest
             divyanjaliperera/analytics-service:latest
 
       - name: Build & push frontend
@@ -61,7 +61,7 @@ jobs:
           context: ./templatemo_589_lugx_gaming
           push: true
           tags: |
-            divyanjaliperera/lugx-frontend:${{ env.IMAGE_TAG }}
+            divyanjaliperera/lugx-frontend:latest
             divyanjaliperera/lugx-frontend:latest
 
   deploy:
@@ -95,19 +95,19 @@ jobs:
 
             # Rolling updates to new images
             kubectl set image deploy/game-service \
-              game-service=divyanjaliperera/game-service:${{ env.IMAGE_TAG }}
+              game-service=divyanjaliperera/game-service:latest
             kubectl set image deploy/order-service \
-              order-service=divyanjaliperera/order-service:${{ env.IMAGE_TAG }}
+              order-service=divyanjaliperera/order-service:latest
             kubectl set image deploy/analytics-service \
-              analytics-service=divyanjaliperera/analytics-service:${{ env.IMAGE_TAG }}
+              analytics-service=divyanjaliperera/analytics-service:latest
             kubectl set image deploy/lugx-frontend \
-              lugx-frontend=divyanjaliperera/lugx-frontend:${{ env.IMAGE_TAG }}
+              lugx-frontend=divyanjaliperera/lugx-frontend:latest
 
             # Wait for rollouts
-            kubectl rollout status deploy/game-service --timeout=180s
-            kubectl rollout status deploy/order-service --timeout=180s
-            kubectl rollout status deploy/analytics-service --timeout=180s
-            kubectl rollout status deploy/lugx-frontend --timeout=180s
+            kubectl rollout status deploy/game-service --timeout=300s
+            kubectl rollout status deploy/order-service --timeout=300s
+            kubectl rollout status deploy/analytics-service --timeout=300s
+            kubectl rollout status deploy/lugx-frontend --timeout=300s
 
             # In-cluster smoke tests
             kubectl delete pod uptest --ignore-not-found
