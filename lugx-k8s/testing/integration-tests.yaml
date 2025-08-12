@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: integration-tests
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: runner
+          image: python:3.11-slim
+          command: ["bash","-lc"]
+          args:
+            - >
+              set -e;
+              pip -q install requests >/dev/null;
+              python - <<'PY'
+              import json, sys, requests
+
+              def check_get(url, expect_json=True):
+                  r = requests.get(url, timeout=15)
+                  assert r.status_code == 200, f"{url} -> {r.status_code}"
+                  if expect_json:
+                      try:
+                          data = r.json()
+                      except Exception as e:
+                          raise AssertionError(f"{url} did not return JSON: {e}")
+                      assert isinstance(data, (list, dict)), f"{url} JSON not list/dict"
+                  print(f"PASS GET: {url}")
+
+              def check_post(url, payload):
+                  r = requests.post(url, json=payload, timeout=15)
+                  assert r.status_code in (200, 201), f"{url} -> {r.status_code}"
+                  print(f"PASS POST: {url}")
+
+              BASE_GAME      = "http://game-service:8000"
+              BASE_ORDER     = "http://order-service:8000"
+              BASE_ANALYTICS = "http://analytics-service:8000"
+
+              # Basic read endpoints
+              check_get(f"{BASE_GAME}/games")
+              check_get(f"{BASE_ORDER}/orders")
+
+              # Analytics: try POST first, fall back to GET if needed
+              try:
+                  check_post(f"{BASE_ANALYTICS}/events",
+                             {"type":"page_view","path":"/demo"})
+              except Exception as e:
+                  print("POST /events failed or not supported, trying GET ...", e)
+                  check_get(f"{BASE_ANALYTICS}/events", expect_json=False)
+
+              print("ALL INTEGRATION TESTS PASSED")
+              PY
